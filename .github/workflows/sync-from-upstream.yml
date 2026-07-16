@@ -1,0 +1,47 @@
+name: sync from upstream
+
+# Mirror the Gemini packaging from stranxik/runward so this thin repo never drifts.
+# Zero secrets by design: it READS a public repo (no credential) and commits with the
+# native GITHUB_TOKEN (contents:write on this repo only). Runs daily as a safety net,
+# and on demand right after a runward release (Actions tab → Run workflow).
+on:
+  schedule:
+    - cron: "17 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: sync-from-upstream
+  cancel-in-progress: true
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7
+
+      - name: Pull the Gemini packaging from stranxik/runward (public — no secret)
+        run: |
+          base="https://raw.githubusercontent.com/stranxik/runward/main/packaging/gemini"
+          curl -fsSL "$base/gemini-extension.json" -o gemini-extension.json
+          mkdir -p hooks
+          curl -fsSL "$base/hooks/hooks.json" -o hooks/hooks.json
+          # Fail loudly if either file is empty or not valid JSON, rather than committing junk.
+          node -e "JSON.parse(require('fs').readFileSync('gemini-extension.json','utf8'))"
+          node -e "JSON.parse(require('fs').readFileSync('hooks/hooks.json','utf8'))"
+
+      - name: Commit if the mirror changed
+        run: |
+          if [ -n "$(git status --porcelain gemini-extension.json hooks/hooks.json)" ]; then
+            git config user.name "runward-sync[bot]"
+            git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+            git add gemini-extension.json hooks/hooks.json
+            v=$(node -e "process.stdout.write(require('./gemini-extension.json').version)")
+            git commit -m "sync: mirror packaging/gemini from stranxik/runward (v${v})"
+            git push
+            echo "synced to v${v}"
+          else
+            echo "already in sync — nothing to do"
+          fi
